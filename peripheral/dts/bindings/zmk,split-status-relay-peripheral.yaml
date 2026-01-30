@@ -1,0 +1,11 @@
+
+description: |
+  Split status relay peripheral
+
+compatible: "zmk,split-status-relay-peripheral"
+
+properties:
+  asdc-channel:
+    type: phandle
+    required: true
+    description: The asdc channel to use.

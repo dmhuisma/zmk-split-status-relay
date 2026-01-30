@@ -1,0 +1,11 @@
+
+description: |
+  Split status relay central
+
+compatible: "zmk,split-status-relay-central"
+
+properties:
+  asdc-channel:
+    type: phandle
+    required: true
+    description: The asdc channel to use.

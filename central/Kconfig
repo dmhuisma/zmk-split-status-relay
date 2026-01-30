@@ -1,0 +1,5 @@
+
+DT_COMPAT_ZMK_SPLIT_STATUS_RELAY_CENTRAL := zmk,split-status-relay-central
+config ZMK_SPLIT_STATUS_RELAY_CENTRAL
+    bool
+    default $(dt_compat_enabled,$(DT_COMPAT_ZMK_SPLIT_STATUS_RELAY_CENTRAL))
