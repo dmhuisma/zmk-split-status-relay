@@ -1,19 +1,11 @@
 
-#define DT_DRV_COMPAT zmk_split_status_relay_central
+#define DT_DRV_COMPAT zmk_split_status_relay
 
 #include <zephyr/devicetree.h>
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
 
-// device configuration data
-struct srcc_config {
-    const struct device *asdc_channel;
-};
-
-// device runtime data
-struct srcc_data {
-    
-};
+#include "split_status_relay.h"
 
 static int srcc_init(const struct device *dev) {
     return 0;

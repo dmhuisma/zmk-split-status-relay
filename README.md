@@ -1,4 +1,4 @@
-# Split Status Relay Peripheral
+# ZMK Split Status Relay
 
 README TODO...
 

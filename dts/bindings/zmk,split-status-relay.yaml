@@ -1,8 +1,8 @@
 
 description: |
-  Split status relay peripheral
+  Split status relay
 
-compatible: "zmk,split-status-relay-peripheral"
+compatible: "zmk,split-status-relay"
 
 properties:
   asdc-channel:
