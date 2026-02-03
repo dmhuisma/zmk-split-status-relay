@@ -40,6 +40,11 @@ static void ssrc_rx_callback(const struct device *dev, uint8_t *data, size_t len
             LOG_DBG("SSRC: Highest active layer event, layer %d name %s", layer_event->layer, layer_event->layer_name);
         }
         break;
+        case SSRC_EVENT_WPM: {
+            ssrc_wpm_event_t *wpm_event = (ssrc_wpm_event_t *)event->data;
+            LOG_DBG("SSRC: WPM event, wpm %d", wpm_event->wpm);
+        }
+        break;
         default:
             // Unknown event type
             break;

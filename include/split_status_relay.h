@@ -11,6 +11,7 @@ typedef enum {
     SSRC_EVENT_CENTRAL_BATTERY_LEVEL,
     SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL,
     SSRC_EVENT_HIGHEST_ACTIVE_LAYER,
+    SSRC_EVENT_WPM,
 } ssrc_event_type_t;
 
 typedef struct {
@@ -31,6 +32,10 @@ typedef struct {
     uint8_t layer;
     char layer_name[];
 } ssrc_highest_active_layer_event_t;
+
+typedef struct {
+    uint8_t wpm;
+} ssrc_wpm_event_t;
 
 typedef struct {
     ssrc_event_type_t type;
