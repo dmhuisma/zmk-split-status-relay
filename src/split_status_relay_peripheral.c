@@ -11,52 +11,50 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-static void ssrc_rx_callback(const struct device *dev, uint8_t *data, size_t len) {
+static void ssrc_rx_callback(const struct device *asdc_dev, uint8_t *data, size_t len) {
     ssrc_event_t *event = (ssrc_event_t *)data;
 
     if (len < sizeof(ssrc_event_t) + event->data_length) {
-        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t) + event->data_length);
+        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, asdc_dev->name, sizeof(ssrc_event_t) + event->data_length);
         return;
     }
 
-    switch (event->type) {
-        case SSRC_EVENT_CONNECTION_STATE: {
-            ssrc_connection_state_event_t *conn_event = (ssrc_connection_state_event_t *)event->data;
-            LOG_DBG("SSRC: Connection state event, slot %d %s", conn_event->slot, conn_event->connected ? "connected" : "disconnected");
-        }
-        break;
-        case SSRC_EVENT_CENTRAL_BATTERY_LEVEL: {
-            ssrc_central_battery_level_event_t *battery_event = (ssrc_central_battery_level_event_t *)event->data;
-            LOG_DBG("SSRC: Central Battery level event, level %d%%", battery_event->battery_level);
-        }
-        break;
-        case SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL: {
-            ssrc_peripheral_battery_level_event_t *battery_event = (ssrc_peripheral_battery_level_event_t *)event->data;
-            LOG_DBG("SSRC: Peripheral Battery level event, slot %d level %d%%", battery_event->slot, battery_event->battery_level);
-        }
-        break;
-        case SSRC_EVENT_HIGHEST_ACTIVE_LAYER: {
-            ssrc_highest_active_layer_event_t *layer_event = (ssrc_highest_active_layer_event_t *)event->data;
-            LOG_DBG("SSRC: Highest active layer event, layer %d name %s", layer_event->layer, layer_event->layer_name);
-        }
-        break;
-        case SSRC_EVENT_WPM: {
-            ssrc_wpm_event_t *wpm_event = (ssrc_wpm_event_t *)event->data;
-            LOG_DBG("SSRC: WPM event, wpm %d", wpm_event->wpm);
-        }
-        break;
-        default:
-            // Unknown event type
-            break;
-    }
+    // Iterate through all SSRC instances and invoke callback on those with matching asdc_channel
+
+    #define SSRC_INVOKE_CB_IF_MATCH(n)                                                          \
+        do {                                                                                    \
+            const struct device *ssrc_dev = DEVICE_DT_INST_GET(n);                              \
+            if (ssrc_dev && device_is_ready(ssrc_dev)) {                                        \
+                const struct ssrc_config *cfg = (const struct ssrc_config *)ssrc_dev->config;   \
+                if (cfg->asdc_channel == asdc_dev) {                                            \
+                    struct ssrc_data *data = (struct ssrc_data *)ssrc_dev->data;                \
+                    if (data->recv_cb != NULL) {                                                \
+                        data->recv_cb(ssrc_dev, event, event_len);                              \
+                    }                                                                           \
+                }                                                                               \
+            }                                                                                   \
+        } while (0);
+
+    size_t event_len = sizeof(ssrc_event_t) + event->data_length;
+    DT_INST_FOREACH_STATUS_OKAY(SSRC_INVOKE_CB_IF_MATCH)
 }
 
-static int srcc_init(const struct device *dev) {
+static int ssrc_init(const struct device *dev) {
     const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
     const struct device *asdc_dev = config->asdc_channel;
     asdc_register_recv_cb(asdc_dev, (asdc_rx_cb)ssrc_rx_callback);
     return 0;
 }
+
+static void ssrc_reg_recv_cb(const struct device *dev, ssrc_rx_cb cb)
+{
+    struct ssrc_data *ssrc_data = (struct ssrc_data *)dev->data;
+    ssrc_data->recv_cb = cb;
+}
+
+static const struct ssrc_driver_api ssrc_api = {
+    .register_recv_cb = &ssrc_reg_recv_cb,
+};
 
 //
 // Define config structs for each instance
@@ -70,8 +68,9 @@ static int srcc_init(const struct device *dev) {
 DT_INST_FOREACH_STATUS_OKAY(SSRC_CFG_DEFINE)
 
 #define SSRC_DEVICE_DEFINE(n)                                                   \
-    DEVICE_DT_INST_DEFINE(n, srcc_init, NULL, NULL,                             \
+    static struct ssrc_data ssrc_data_##n;                                      \
+    DEVICE_DT_INST_DEFINE(n, ssrc_init, NULL, &ssrc_data_##n,                   \
                           &config_##n, POST_KERNEL,                             \
-                          CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, NULL);
+                          CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &ssrc_api);
 
 DT_INST_FOREACH_STATUS_OKAY(SSRC_DEVICE_DEFINE)

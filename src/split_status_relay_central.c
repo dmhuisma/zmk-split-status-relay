@@ -16,7 +16,7 @@
 
 #include "split_status_relay.h"
 
-// TODO - listeners for HID indicators, active modifiers, output status, WPM
+// TODO - listeners for HID indicators, active modifiers, output status
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -266,19 +266,27 @@ ZMK_SUBSCRIPTION(central_wpm_listener, zmk_wpm_state_changed);
 #endif
 
 //
-// ASDC receive callback
+// SRCC receive callback
 //
 
 static void ssrc_rx_callback(const struct device *dev, uint8_t *data, size_t len) {
     //
     // the central relays all messages to the peripheral(s)
-    if (len < sizeof(ssrc_event_t)) {
-        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t));
+    ssrc_event_t *event = (ssrc_event_t *)data;
+
+    if (len < sizeof(ssrc_event_t) + event->data_length) {
+        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t) + event->data_length);
         return;
     }
-    ssrc_event_t *event = (ssrc_event_t *)data;
+
     LOG_DBG("SSRC: Received event type %d from %s, relaying to all peripherals", event->type, dev->name);
     send_ssrc_event_for_every_dev(event, 0);
+
+    // run the local registered callback as well
+    struct ssrc_data *ssrc_data = (struct ssrc_data *)dev->data;
+    if (ssrc_data->recv_cb != NULL) {
+        ssrc_data->recv_cb(dev, event, sizeof(ssrc_event_t) + event->data_length);
+    }
 }
 
 //
@@ -309,6 +317,16 @@ static int srcc_init(const struct device *dev) {
     return 0;
 }
 
+static void ssrc_reg_recv_cb(const struct device *dev, ssrc_rx_cb cb)
+{
+    struct ssrc_data *ssrc_data = (struct ssrc_data *)dev->data;
+    ssrc_data->recv_cb = cb;
+}
+
+static const struct ssrc_driver_api ssrc_api = {
+    .register_recv_cb = &ssrc_reg_recv_cb,
+};
+
 //
 // Define config structs for each instance
 //
@@ -321,8 +339,9 @@ static int srcc_init(const struct device *dev) {
 DT_INST_FOREACH_STATUS_OKAY(SSRC_CFG_DEFINE)
 
 #define SSRC_DEVICE_DEFINE(n)                                                   \
-    DEVICE_DT_INST_DEFINE(n, srcc_init, NULL, NULL,                             \
+    static struct ssrc_data ssrc_data_##n;                                      \
+    DEVICE_DT_INST_DEFINE(n, srcc_init, NULL, &ssrc_data_##n,                   \
                           &config_##n, POST_KERNEL,                             \
-                          CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, NULL);
+                          CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &ssrc_api);
 
 DT_INST_FOREACH_STATUS_OKAY(SSRC_DEVICE_DEFINE)

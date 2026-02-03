@@ -1,10 +1,9 @@
 
-#include <zephyr/kernel.h>
+#ifndef ZMK_SPLIT_STATUS_RELAY_H_
+#define ZMK_SPLIT_STATUS_RELAY_H_
 
-// device configuration data
-struct ssrc_config {
-    const struct device *asdc_channel;
-};
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
 
 typedef enum {
     SSRC_EVENT_CONNECTION_STATE,
@@ -43,5 +42,34 @@ typedef struct {
     uint8_t data[];
 } ssrc_event_t;
 
-void on_split_peripheral_connected(uint8_t slot);
-void on_split_peripheral_disconnected(uint8_t slot);
+typedef void (*ssrc_rx_cb)(const struct device *dev, ssrc_event_t *event, size_t event_length);
+typedef void (*ssrc_register_rx_cb)(const struct device *dev, ssrc_rx_cb cb);
+
+// device configuration data
+struct ssrc_config {
+    const struct device *asdc_channel;
+};
+
+// device runtime data structure
+struct ssrc_data {
+    ssrc_rx_cb recv_cb;
+};
+
+__subsystem struct ssrc_driver_api {
+    ssrc_register_rx_cb register_recv_cb;
+};
+
+__syscall void ssrc_register_recv_cb(const struct device *dev, ssrc_rx_cb cb);
+
+static inline void z_impl_ssrc_register_recv_cb(const struct device *dev, ssrc_rx_cb cb)
+{
+    const struct ssrc_driver_api *api = (const struct ssrc_driver_api *)dev->api;
+	if (api->register_recv_cb == NULL) {
+		return;
+	}
+	api->register_recv_cb(dev, cb);
+}
+
+#include <syscalls/split_status_relay.h>
+
+#endif // ZMK_SPLIT_STATUS_RELAY_H_

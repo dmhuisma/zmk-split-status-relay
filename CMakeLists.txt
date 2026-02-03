@@ -2,6 +2,8 @@ zephyr_library()
 
 if (CONFIG_ZMK_SPLIT_STATUS_RELAY)
 
+  zephyr_syscall_header(include/split_status_relay.h)
+
   if (CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     zephyr_library_sources(src/split_status_relay_central.c)
     if (CONFIG_ZMK_SPLIT_BLE)

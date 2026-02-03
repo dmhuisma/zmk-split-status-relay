@@ -3,7 +3,8 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/logging/log.h>
 
-#include "split_status_relay.h"
+void on_split_peripheral_connected(uint8_t slot);
+void on_split_peripheral_disconnected(uint8_t slot);
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
