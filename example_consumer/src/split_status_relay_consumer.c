@@ -43,6 +43,11 @@ static void ssrc_consumer_rx_callback(const struct device *dev, ssrc_event_t *ev
             LOG_DBG("SSRCC: WPM event, wpm %d", wpm_event->wpm);
         }
         break;
+        case SSRC_EVENT_TRANSPORT: {
+            ssrc_transport_event_t *transport_event = (ssrc_transport_event_t *)event->data;
+            LOG_DBG("SSRCC: Transport event, transport %u", transport_event->transport);
+        }
+        break;
         default: {
             // Unknown event type
             LOG_DBG("SSRCC: unknown event type %d", event->type);

@@ -4,6 +4,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zmk/endpoints.h>
 
 typedef enum {
     SSRC_EVENT_CONNECTION_STATE,
@@ -11,6 +12,7 @@ typedef enum {
     SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL,
     SSRC_EVENT_HIGHEST_ACTIVE_LAYER,
     SSRC_EVENT_WPM,
+    SSRC_EVENT_TRANSPORT,
 } ssrc_event_type_t;
 
 typedef struct {
@@ -35,6 +37,11 @@ typedef struct {
 typedef struct {
     uint8_t wpm;
 } ssrc_wpm_event_t;
+
+typedef struct {
+    // matches enum zmk_transport, but that is only available in centrals
+    uint8_t transport;
+} ssrc_transport_event_t;
 
 typedef struct {
     ssrc_event_type_t type;

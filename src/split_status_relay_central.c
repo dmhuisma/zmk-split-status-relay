@@ -13,10 +13,12 @@
 #include <zmk/events/layer_state_changed.h>
 #include <zmk/keymap.h>
 #include <zmk/events/wpm_state_changed.h>
+#include <zmk/events/endpoint_changed.h>
+#include <zmk/endpoints.h>
 
 #include "split_status_relay.h"
 
-// TODO - listeners for HID indicators, active modifiers, output status
+// TODO - listeners for HID indicators, active modifiers
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -30,6 +32,7 @@ struct ssrc_state_t {
     uint8_t central_battery_level;
     uint8_t highest_active_layer;
     int wpm;
+    enum zmk_transport transport;
 };
 
 static struct ssrc_state_t ssrc_state = {
@@ -37,6 +40,7 @@ static struct ssrc_state_t ssrc_state = {
     .central_battery_level = 0xff,
     .highest_active_layer = 0xff,
     .wpm = 0xff,
+    .transport = 0xff,
 };
 
 void send_ssrc_event(const struct device *dev, ssrc_event_t *event, uint32_t delay_ms) {
@@ -118,6 +122,16 @@ static void send_wpm_event(int wpm, uint32_t delay_ms) {
     send_ssrc_event_for_every_dev(event, delay_ms);
 }
 
+static void send_transport_event(enum zmk_transport transport, uint32_t delay_ms) {
+    uint8_t event_buf[sizeof(ssrc_event_t) + sizeof(ssrc_transport_event_t)];
+    ssrc_event_t *event = (ssrc_event_t *)event_buf;
+        event->type = SSRC_EVENT_TRANSPORT;
+        event->data_length = sizeof(ssrc_transport_event_t);
+    ssrc_transport_event_t *data = (ssrc_transport_event_t *)event->data;
+        data->transport = (uint8_t)transport;
+    send_ssrc_event_for_every_dev(event, delay_ms);
+}
+
 static void send_all_events(uint32_t initial_delay_ms) {
     // 0xff means that a value has not been set yet, so do not send
 
@@ -138,6 +152,10 @@ static void send_all_events(uint32_t initial_delay_ms) {
 
     if (ssrc_state.wpm != 0xff) {
         send_wpm_event(ssrc_state.wpm, 0);
+    }
+
+    if (ssrc_state.transport != 0xff) {
+        send_transport_event(ssrc_state.transport, 0);
     }
 }
 
@@ -266,6 +284,23 @@ ZMK_SUBSCRIPTION(central_wpm_listener, zmk_wpm_state_changed);
 #endif
 
 //
+// Endpoint listener
+//
+
+static int central_endpoint_listener(const zmk_event_t *eh) {
+    enum zmk_transport transport = zmk_endpoints_selected().transport;
+    if (transport == ssrc_state.transport) {
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+    ssrc_state.transport = transport;
+    send_transport_event(ssrc_state.transport, 0);
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(central_endpoint_listener, central_endpoint_listener);
+ZMK_SUBSCRIPTION(central_endpoint_listener, zmk_endpoint_changed);
+
+//
 // SSRC receive callback
 //
 
@@ -320,6 +355,9 @@ static int srcc_init(const struct device *dev) {
     // get the initial WPM
     ssrc_state.wpm = zmk_wpm_get_state();
     #endif
+
+    // get the transport type
+    ssrc_state.transport = zmk_endpoints_selected().transport;
 
     // Register ASDC receive callback
     const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
