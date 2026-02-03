@@ -12,24 +12,34 @@
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 static void ssrc_rx_callback(const struct device *dev, uint8_t *data, size_t len) {
-    if (len < sizeof(ssrc_event_t)) {
-        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t));
+    ssrc_event_t *event = (ssrc_event_t *)data;
+
+    if (len < sizeof(ssrc_event_t) + event->data_length) {
+        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t) + event->data_length);
         return;
     }
 
-    ssrc_event_t *event = (ssrc_event_t *)data;
-
     switch (event->type) {
-        case SSRC_EVENT_CONNECTION_STATE_CHANGED:
-            LOG_DBG("SSRC: Connection state event, slot %d %s", event->connection_state_changed.slot, 
-                    event->connection_state_changed.connected ? "connected" : "disconnected");
-            break;
-        case SSRC_EVENT_CENTRAL_BATTERY_LEVEL_CHANGED:
-            LOG_DBG("SSRC: Central Battery level event, level %d%%", event->battery_level_changed.battery_level);
-            break;
-        case SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL_CHANGED:
-            LOG_DBG("SSRC: Peripheral Battery level event, slot %d level %d%%", event->battery_level_changed.slot, event->battery_level_changed.battery_level);
-            break;
+        case SSRC_EVENT_CONNECTION_STATE: {
+            ssrc_connection_state_event_t *conn_event = (ssrc_connection_state_event_t *)event->data;
+            LOG_DBG("SSRC: Connection state event, slot %d %s", conn_event->slot, conn_event->connected ? "connected" : "disconnected");
+        }
+        break;
+        case SSRC_EVENT_CENTRAL_BATTERY_LEVEL: {
+            ssrc_central_battery_level_event_t *battery_event = (ssrc_central_battery_level_event_t *)event->data;
+            LOG_DBG("SSRC: Central Battery level event, level %d%%", battery_event->battery_level);
+        }
+        break;
+        case SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL: {
+            ssrc_peripheral_battery_level_event_t *battery_event = (ssrc_peripheral_battery_level_event_t *)event->data;
+            LOG_DBG("SSRC: Peripheral Battery level event, slot %d level %d%%", battery_event->slot, battery_event->battery_level);
+        }
+        break;
+        case SSRC_EVENT_HIGHEST_ACTIVE_LAYER: {
+            ssrc_highest_active_layer_event_t *layer_event = (ssrc_highest_active_layer_event_t *)event->data;
+            LOG_DBG("SSRC: Highest active layer event, layer %d name %s", layer_event->layer, layer_event->layer_name);
+        }
+        break;
         default:
             // Unknown event type
             break;
