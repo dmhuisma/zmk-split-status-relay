@@ -14,6 +14,8 @@ typedef enum {
     SSRC_EVENT_WPM,
     SSRC_EVENT_TRANSPORT,
     SSRC_EVENT_ACTIVE_BLE_PROFILE,
+    SSRC_EVENT_CENTRAL_USB_CONNECTION_STATE,
+    SSRC_EVENT_PERIPHERAL_USB_CONNECTION_STATE,
 } ssrc_event_type_t;
 
 typedef struct {
@@ -49,6 +51,15 @@ typedef struct {
     bool active_profile_connected;
     bool active_profile_bonded;
 } ssrc_active_ble_profile_event_t;
+
+typedef struct {
+    bool connected;
+} ssrc_central_usb_connection_state_t;
+
+typedef struct {
+    uint8_t slot;
+    bool connected;
+} ssrc_peripheral_usb_connection_state_t;
 
 typedef struct {
     ssrc_event_type_t type;

@@ -56,6 +56,16 @@ static void ssrc_consumer_rx_callback(const struct device *dev, ssrc_event_t *ev
                     ble_event->active_profile_bonded);
         }
         break;
+        case SSRC_EVENT_CENTRAL_USB_CONNECTION_STATE: {
+            ssrc_central_usb_connection_state_t *usb_event = (ssrc_central_usb_connection_state_t *)event->data;
+            LOG_DBG("SSRCC: Central USB Connection State event, connected %d", usb_event->connected);
+        }
+        break;
+        case SSRC_EVENT_PERIPHERAL_USB_CONNECTION_STATE: {
+            ssrc_peripheral_usb_connection_state_t *usb_event = (ssrc_peripheral_usb_connection_state_t *)event->data;
+            LOG_DBG("SSRCC: Peripheral USB Connection State event, slot %d connected %d", usb_event->slot, usb_event->connected);
+        }
+        break;
         default: {
             // Unknown event type
             LOG_DBG("SSRCC: unknown event type %d", event->type);

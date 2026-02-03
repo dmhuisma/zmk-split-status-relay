@@ -6,12 +6,80 @@
 #include <zephyr/kernel.h>
 #include <arbitrary_split_data_channel.h>
 #include <zephyr/logging/log.h>
-
+#include <zmk/events/usb_conn_state_changed.h>
 #include "split_status_relay.h"
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-static void ssrc_rx_callback(const struct device *asdc_dev, uint8_t *data, size_t len) {
+struct ssrp_state_t {
+    #if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+    bool usb_connection_state;
+    #endif
+};
+
+static struct ssrp_state_t ssrp_state;
+
+void send_ssrp_event(const struct device *dev, ssrc_event_t *event, uint32_t delay_ms) {
+    const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
+    const struct device *asdc_dev = config->asdc_channel;
+    int ret = asdc_send(asdc_dev, (const uint8_t*)event, sizeof(ssrc_event_t) + event->data_length, delay_ms);
+    if (ret < 0) {
+        LOG_ERR("Failed to send ASDC message on device %s: %d", dev->name, ret);
+    }
+}
+
+#define SSRP_SEND_FOR_EVERY_DEV(n)                                      \
+    do {                                                                \
+        const struct device *d = DEVICE_DT_INST_GET(n);                 \
+        if (d && device_is_ready(d)) {                                  \
+            send_ssrp_event(d, event, delay_ms);                        \
+        }                                                               \
+    } while (0);
+
+void send_ssrp_event_for_every_dev(ssrc_event_t *event, uint32_t delay_ms) {
+    DT_INST_FOREACH_STATUS_OKAY(SSRP_SEND_FOR_EVERY_DEV)
+}
+
+#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+void send_usb_connection_state_event(bool connected, uint32_t delay_ms) {
+    uint8_t event_buf[sizeof(ssrc_event_t) + sizeof(ssrc_peripheral_usb_connection_state_t)];
+    ssrc_event_t *event = (ssrc_event_t *)event_buf;
+        event->type = SSRC_EVENT_PERIPHERAL_USB_CONNECTION_STATE;
+        event->data_length = sizeof(ssrc_peripheral_usb_connection_state_t);
+    ssrc_peripheral_usb_connection_state_t *data = (ssrc_peripheral_usb_connection_state_t *)event->data;
+        // the peripheral does not know its slot, the central will fill this in when it relays the message
+        data->slot = 0xff;
+        data->connected = connected;
+    send_ssrp_event_for_every_dev(event, delay_ms);
+}
+#endif
+
+static void send_all_events(uint32_t initial_delay_ms) {
+    send_usb_connection_state_event(ssrp_state.usb_connection_state, initial_delay_ms);
+}
+
+//
+// USB connection state listener
+//
+
+#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+
+static int central_usb_connection_state_listener(const zmk_event_t *eh) {
+    ssrp_state.usb_connection_state = zmk_usb_is_powered();
+    send_usb_connection_state_event(ssrp_state.usb_connection_state, 0);
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(central_usb_connection_state_listener, central_usb_connection_state_listener);
+ZMK_SUBSCRIPTION(central_usb_connection_state_listener, zmk_usb_conn_state_changed);
+
+#endif
+
+//
+// ASDC receive callback
+//
+
+static void asdc_rx_callback(const struct device *asdc_dev, void* sender_conn, uint8_t *data, size_t len) {
     ssrc_event_t *event = (ssrc_event_t *)data;
 
     if (len < sizeof(ssrc_event_t) + event->data_length) {
@@ -39,10 +107,24 @@ static void ssrc_rx_callback(const struct device *asdc_dev, uint8_t *data, size_
     DT_INST_FOREACH_STATUS_OKAY(SSRC_INVOKE_CB_IF_MATCH)
 }
 
+void on_split_connected(void) {
+    send_all_events(2000);
+}
+
+void on_split_disconnected(void) {
+
+}
+
 static int ssrc_init(const struct device *dev) {
     const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
     const struct device *asdc_dev = config->asdc_channel;
-    asdc_register_recv_cb(asdc_dev, (asdc_rx_cb)ssrc_rx_callback);
+    asdc_register_recv_cb(asdc_dev, asdc_rx_callback);
+
+    // initial values
+    #if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+    ssrp_state.usb_connection_state = zmk_usb_is_powered();
+    #endif
+
     return 0;
 }
 

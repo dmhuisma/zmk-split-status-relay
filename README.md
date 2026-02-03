@@ -12,6 +12,7 @@ The following information is relayed to all peripherals:
 - WPM
 - Endpoint transport (WiFi, BLE)
 - Active BLE profile
+- USB connection state
 
 # How to use
 

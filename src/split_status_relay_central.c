@@ -18,16 +18,17 @@
 #if defined(CONFIG_ZMK_BLE)
 #include <zmk/events/ble_active_profile_changed.h>
 #endif
-
+#include <zmk/events/usb_conn_state_changed.h>
 #include "split_status_relay.h"
 
-// TODO - listeners for HID indicators, active modifiers
-
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+
+int8_t get_peripheral_index_by_conn(void *conn);
 
 struct peripheral_state {
     bool connected;
     uint8_t battery_level;
+    bool usb_connection_state;
 };
 
 struct ssrc_state_t {
@@ -40,6 +41,9 @@ struct ssrc_state_t {
     uint8_t active_ble_profile_index;
     bool active_ble_profile_connected;
     bool active_ble_profile_bonded;
+    #endif
+    #if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+    bool central_usb_connection_state;
     #endif
 };
 
@@ -154,6 +158,29 @@ void send_active_ble_transport_event(uint8_t profile_index, bool connected, bool
 }
 #endif
 
+#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+void send_central_usb_connection_state_event(bool connected, uint32_t delay_ms) {
+    uint8_t event_buf[sizeof(ssrc_event_t) + sizeof(ssrc_central_usb_connection_state_t)];
+    ssrc_event_t *event = (ssrc_event_t *)event_buf;
+        event->type = SSRC_EVENT_CENTRAL_USB_CONNECTION_STATE;
+        event->data_length = sizeof(ssrc_central_usb_connection_state_t);
+    ssrc_central_usb_connection_state_t *data = (ssrc_central_usb_connection_state_t *)event->data;
+        data->connected = connected;
+    send_ssrc_event_for_every_dev(event, delay_ms);
+}
+#endif
+
+void send_peripheral_usb_connection_state_event(uint8_t slot, bool connected, uint32_t delay_ms) {
+    uint8_t event_buf[sizeof(ssrc_event_t) + sizeof(ssrc_peripheral_usb_connection_state_t)];
+    ssrc_event_t *event = (ssrc_event_t *)event_buf;
+        event->type = SSRC_EVENT_PERIPHERAL_USB_CONNECTION_STATE;
+        event->data_length = sizeof(ssrc_peripheral_usb_connection_state_t);
+    ssrc_peripheral_usb_connection_state_t *data = (ssrc_peripheral_usb_connection_state_t *)event->data;
+        data->slot = slot;
+        data->connected = connected;
+    send_ssrc_event_for_every_dev(event, delay_ms);
+}
+
 static void send_all_events(uint32_t initial_delay_ms) {
     // 0xff means that a value has not been set yet, so do not send
 
@@ -161,6 +188,9 @@ static void send_all_events(uint32_t initial_delay_ms) {
         send_connection_state_event(i, ssrc_state.peripheral_connections[i].connected, i == 0 ? initial_delay_ms : 0);
         if (ssrc_state.peripheral_connections[i].connected && ssrc_state.peripheral_connections[i].battery_level != 0xFF) {
             send_peripheral_battery_level_event(i, ssrc_state.peripheral_connections[i].battery_level, initial_delay_ms);
+        }
+        if (ssrc_state.peripheral_connections[i].connected) {
+            send_peripheral_usb_connection_state_event(i, ssrc_state.peripheral_connections[i].usb_connection_state, initial_delay_ms);
         }
     }
 
@@ -185,6 +215,10 @@ static void send_all_events(uint32_t initial_delay_ms) {
                                     ssrc_state.active_ble_profile_connected,
                                     ssrc_state.active_ble_profile_bonded,
                                     0);
+    #endif
+
+    #if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+    send_central_usb_connection_state_event(ssrc_state.central_usb_connection_state, 0);
     #endif
 }
 
@@ -352,10 +386,27 @@ ZMK_SUBSCRIPTION(central_active_ble_profile_listener, zmk_ble_active_profile_cha
 #endif
 
 //
-// SSRC receive callback
+// USB connection state listener
 //
 
-static void ssrc_rx_callback(const struct device *asdc_dev, uint8_t *data, size_t len) {
+#if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+
+static int central_usb_connection_state_listener(const zmk_event_t *eh) {
+    ssrc_state.central_usb_connection_state = zmk_usb_is_powered();
+    send_central_usb_connection_state_event(ssrc_state.central_usb_connection_state, 0);
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(central_usb_connection_state_listener, central_usb_connection_state_listener);
+ZMK_SUBSCRIPTION(central_usb_connection_state_listener, zmk_usb_conn_state_changed);
+
+#endif
+
+//
+// ASDC receive callback
+//
+
+static void asdc_rx_callback(const struct device *asdc_dev, void* sender_conn, uint8_t *data, size_t len) {
     //
     // the central relays all messages to the peripheral(s)
     ssrc_event_t *event = (ssrc_event_t *)data;
@@ -363,6 +414,27 @@ static void ssrc_rx_callback(const struct device *asdc_dev, uint8_t *data, size_
     if (len < sizeof(ssrc_event_t) + event->data_length) {
         LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, asdc_dev->name, sizeof(ssrc_event_t) + event->data_length);
         return;
+    }
+
+    // get the peripheral slot that the event came from
+    int8_t slot = get_peripheral_index_by_conn(sender_conn);
+    if (slot < 0) {
+        LOG_ERR("SSRC: Received message from unknown peripheral connection on %s", asdc_dev->name);
+        return;
+    }
+
+    // here we will update our internal states of the peripherals
+    // we also may need to update the slot, since the peripheral does not know it before sending
+    switch (event->type) {
+        case SSRC_EVENT_PERIPHERAL_USB_CONNECTION_STATE: {
+            ssrc_peripheral_usb_connection_state_t *usb_event = (ssrc_peripheral_usb_connection_state_t *)event->data;
+            usb_event->slot = slot;  // fill in the peripheral slot for relaying
+            ssrc_state.peripheral_connections[slot].usb_connection_state = usb_event->connected;
+        }
+        break;
+        default:
+            // other event types do not affect our internal state
+            break;
     }
 
     LOG_DBG("SSRC: Received event type %d from %s, relaying to all peripherals", event->type, asdc_dev->name);
@@ -397,6 +469,7 @@ static int srcc_init(const struct device *dev) {
     for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
         ssrc_state.peripheral_connections[i].connected = false;
         ssrc_state.peripheral_connections[i].battery_level = 0xFF;  // 0xFF = unknown
+        ssrc_state.peripheral_connections[i].usb_connection_state = false;
     }
 
     // Get initial values
@@ -410,11 +483,14 @@ static int srcc_init(const struct device *dev) {
     ssrc_state.active_ble_profile_connected = zmk_ble_active_profile_is_connected();
     ssrc_state.active_ble_profile_bonded = !zmk_ble_active_profile_is_open();
     #endif
+    #if IS_ENABLED(CONFIG_USB_DEVICE_STACK)
+    ssrc_state.central_usb_connection_state = zmk_usb_is_powered();
+    #endif
 
     // Register ASDC receive callback
     const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
     const struct device *asdc_dev = config->asdc_channel;
-    asdc_register_recv_cb(asdc_dev, (asdc_rx_cb)ssrc_rx_callback);
+    asdc_register_recv_cb(asdc_dev, asdc_rx_callback);
     
     LOG_INF("Split status relay central initialized");
     return 0;

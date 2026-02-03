@@ -15,9 +15,10 @@ struct peripheral_ble_state {
 
 static struct peripheral_ble_state peripheral_ble_connections[CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS];
 
-static int8_t find_peripheral_index(struct bt_conn *conn) {
+int8_t get_peripheral_index_by_conn(void *conn) {
+    struct bt_conn* conn_bt = (struct bt_conn*)(conn);
     for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        if (peripheral_ble_connections[i].conn == conn) {
+        if (peripheral_ble_connections[i].conn == conn_bt) {
             return i;
         }
     }
@@ -53,7 +54,7 @@ static void on_peripheral_connected(struct bt_conn *conn, uint8_t err) {
 }
 
 static void on_peripheral_disconnected(struct bt_conn *conn, uint8_t reason) {
-    int8_t slot = find_peripheral_index(conn);
+    int8_t slot = get_peripheral_index_by_conn(conn);
     if (slot >= 0) {
         peripheral_ble_connections[slot].connected = false;
         peripheral_ble_connections[slot].conn = NULL;
