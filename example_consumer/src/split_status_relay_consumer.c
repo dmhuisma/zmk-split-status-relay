@@ -48,6 +48,14 @@ static void ssrc_consumer_rx_callback(const struct device *dev, ssrc_event_t *ev
             LOG_DBG("SSRCC: Transport event, transport %u", transport_event->transport);
         }
         break;
+        case SSRC_EVENT_ACTIVE_BLE_PROFILE: {
+            ssrc_active_ble_profile_event_t *ble_event = (ssrc_active_ble_profile_event_t *)event->data;
+            LOG_DBG("SSRCC: Active BLE Profile event, index %u connected %d bonded %d",
+                    ble_event->active_profile_index,
+                    ble_event->active_profile_connected,
+                    ble_event->active_profile_bonded);
+        }
+        break;
         default: {
             // Unknown event type
             LOG_DBG("SSRCC: unknown event type %d", event->type);

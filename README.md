@@ -11,6 +11,7 @@ The following information is relayed to all peripherals:
 - Highest active layer
 - WPM
 - Endpoint transport (WiFi, BLE)
+- Active BLE profile
 
 # How to use
 

@@ -15,6 +15,9 @@
 #include <zmk/events/wpm_state_changed.h>
 #include <zmk/events/endpoint_changed.h>
 #include <zmk/endpoints.h>
+#if defined(CONFIG_ZMK_BLE)
+#include <zmk/events/ble_active_profile_changed.h>
+#endif
 
 #include "split_status_relay.h"
 
@@ -33,6 +36,11 @@ struct ssrc_state_t {
     uint8_t highest_active_layer;
     int wpm;
     enum zmk_transport transport;
+    #if defined(CONFIG_ZMK_BLE)
+    uint8_t active_ble_profile_index;
+    bool active_ble_profile_connected;
+    bool active_ble_profile_bonded;
+    #endif
 };
 
 static struct ssrc_state_t ssrc_state = {
@@ -132,6 +140,20 @@ static void send_transport_event(enum zmk_transport transport, uint32_t delay_ms
     send_ssrc_event_for_every_dev(event, delay_ms);
 }
 
+#if defined(CONFIG_ZMK_BLE)
+void send_active_ble_transport_event(uint8_t profile_index, bool connected, bool bonded, uint32_t delay_ms) {
+    uint8_t event_buf[sizeof(ssrc_event_t) + sizeof(ssrc_active_ble_profile_event_t)];
+    ssrc_event_t *event = (ssrc_event_t *)event_buf;
+        event->type = SSRC_EVENT_ACTIVE_BLE_PROFILE;
+        event->data_length = sizeof(ssrc_active_ble_profile_event_t);
+    ssrc_active_ble_profile_event_t *data = (ssrc_active_ble_profile_event_t *)event->data;
+        data->active_profile_index = profile_index;
+        data->active_profile_connected = connected;
+        data->active_profile_bonded = bonded;
+    send_ssrc_event_for_every_dev(event, delay_ms);
+}
+#endif
+
 static void send_all_events(uint32_t initial_delay_ms) {
     // 0xff means that a value has not been set yet, so do not send
 
@@ -157,6 +179,13 @@ static void send_all_events(uint32_t initial_delay_ms) {
     if (ssrc_state.transport != 0xff) {
         send_transport_event(ssrc_state.transport, 0);
     }
+
+    #if defined(CONFIG_ZMK_BLE)
+    send_active_ble_transport_event(ssrc_state.active_ble_profile_index,
+                                    ssrc_state.active_ble_profile_connected,
+                                    ssrc_state.active_ble_profile_bonded,
+                                    0);
+    #endif
 }
 
 //
@@ -301,6 +330,28 @@ ZMK_LISTENER(central_endpoint_listener, central_endpoint_listener);
 ZMK_SUBSCRIPTION(central_endpoint_listener, zmk_endpoint_changed);
 
 //
+// Active BLE profile listener
+//
+
+#if defined(CONFIG_ZMK_BLE)
+
+static int central_active_ble_profile_listener(const zmk_event_t *eh) {
+    ssrc_state.active_ble_profile_index = zmk_ble_active_profile_index();
+    ssrc_state.active_ble_profile_connected = zmk_ble_active_profile_is_connected();
+    ssrc_state.active_ble_profile_bonded = !zmk_ble_active_profile_is_open();
+    send_active_ble_transport_event(ssrc_state.active_ble_profile_index,
+                                    ssrc_state.active_ble_profile_connected,
+                                    ssrc_state.active_ble_profile_bonded,
+                                    0);
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(central_active_ble_profile_listener, central_active_ble_profile_listener);
+ZMK_SUBSCRIPTION(central_active_ble_profile_listener, zmk_ble_active_profile_changed);
+
+#endif
+
+//
 // SSRC receive callback
 //
 
@@ -348,16 +399,17 @@ static int srcc_init(const struct device *dev) {
         ssrc_state.peripheral_connections[i].battery_level = 0xFF;  // 0xFF = unknown
     }
 
-    // Get the initial highest active layer
+    // Get initial values
     ssrc_state.highest_active_layer = zmk_keymap_highest_layer_active();
-
     #ifdef CONFIG_ZMK_WPM
-    // get the initial WPM
     ssrc_state.wpm = zmk_wpm_get_state();
     #endif
-
-    // get the transport type
     ssrc_state.transport = zmk_endpoints_selected().transport;
+    #if defined(CONFIG_ZMK_BLE)
+    ssrc_state.active_ble_profile_index = zmk_ble_active_profile_index();
+    ssrc_state.active_ble_profile_connected = zmk_ble_active_profile_is_connected();
+    ssrc_state.active_ble_profile_bonded = !zmk_ble_active_profile_is_open();
+    #endif
 
     // Register ASDC receive callback
     const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
