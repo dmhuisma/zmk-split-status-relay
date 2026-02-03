@@ -266,27 +266,40 @@ ZMK_SUBSCRIPTION(central_wpm_listener, zmk_wpm_state_changed);
 #endif
 
 //
-// SRCC receive callback
+// SSRC receive callback
 //
 
-static void ssrc_rx_callback(const struct device *dev, uint8_t *data, size_t len) {
+static void ssrc_rx_callback(const struct device *asdc_dev, uint8_t *data, size_t len) {
     //
     // the central relays all messages to the peripheral(s)
     ssrc_event_t *event = (ssrc_event_t *)data;
 
     if (len < sizeof(ssrc_event_t) + event->data_length) {
-        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t) + event->data_length);
+        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, asdc_dev->name, sizeof(ssrc_event_t) + event->data_length);
         return;
     }
 
-    LOG_DBG("SSRC: Received event type %d from %s, relaying to all peripherals", event->type, dev->name);
+    LOG_DBG("SSRC: Received event type %d from %s, relaying to all peripherals", event->type, asdc_dev->name);
     send_ssrc_event_for_every_dev(event, 0);
 
-    // run the local registered callback as well
-    struct ssrc_data *ssrc_data = (struct ssrc_data *)dev->data;
-    if (ssrc_data->recv_cb != NULL) {
-        ssrc_data->recv_cb(dev, event, sizeof(ssrc_event_t) + event->data_length);
-    }
+    // run the local registered callbacks as well
+    // Iterate through all SSRC instances and invoke callback on those with matching asdc_channel
+    #define SSRC_INVOKE_CB_IF_MATCH(n)                                                          \
+        do {                                                                                    \
+            const struct device *ssrc_dev = DEVICE_DT_INST_GET(n);                              \
+            if (ssrc_dev && device_is_ready(ssrc_dev)) {                                        \
+                const struct ssrc_config *cfg = (const struct ssrc_config *)ssrc_dev->config;   \
+                if (cfg->asdc_channel == asdc_dev) {                                            \
+                    struct ssrc_data *data = (struct ssrc_data *)ssrc_dev->data;                \
+                    if (data->recv_cb != NULL) {                                                \
+                        data->recv_cb(ssrc_dev, event, event_len);                              \
+                    }                                                                           \
+                }                                                                               \
+            }                                                                                   \
+        } while (0);
+
+    size_t event_len = sizeof(ssrc_event_t) + event->data_length;
+    DT_INST_FOREACH_STATUS_OKAY(SSRC_INVOKE_CB_IF_MATCH)
 }
 
 //
