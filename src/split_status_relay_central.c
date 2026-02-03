@@ -4,101 +4,101 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
-#include <zephyr/bluetooth/conn.h>
 #include <zmk/split/transport/central.h>
 #include <zmk/split/central.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/battery_state_changed.h>
+#include <zephyr/logging/log.h>
+#include <arbitrary_split_data_channel.h>
 
 #include "split_status_relay.h"
 
-#include <zephyr/logging/log.h>
-
-// TODO - this has BLE specific code, put into BLE transport subfolder
 // TODO - verify with multiple peripherals that conn and battery_level slots match to the same devices
-
 // TODO - listeners for HID indicators, active modifiers, highest layer name, output status, WPM
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 struct peripheral_state {
-    struct bt_conn *conn;
     bool connected;
     uint8_t battery_level;
 };
 
 static struct peripheral_state peripheral_connections[CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS];
 
-static int8_t find_peripheral_index(struct bt_conn *conn) {
-    for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        if (peripheral_connections[i].conn == conn) {
-            return i;
-        }
+static uint8_t central_state_of_charge = 0;
+
+void send_ssrc_event(const struct device *dev, ssrc_event_t *event, uint32_t delay_ms) {
+    const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
+    const struct device *asdc_dev = config->asdc_channel;
+    int ret = asdc_send(asdc_dev, (const uint8_t*)event, sizeof(*event), delay_ms);
+    if (ret < 0) {
+        LOG_ERR("Failed to send ASDC message on device %s: %d", dev->name, ret);
     }
-    return -1;
 }
 
-static void on_peripheral_connected(struct bt_conn *conn, uint8_t err) {
-    if (err) {
-        return;
-    }
+#define SSRC_SEND_FOR_EVERY_DEV(n)                                      \
+    do {                                                                \
+        const struct device *d = DEVICE_DT_INST_GET(n);                 \
+        if (d && device_is_ready(d)) {                                  \
+            send_ssrc_event(d, event, delay_ms);                        \
+        }                                                               \
+    } while (0);
 
-    char addr[BT_ADDR_LE_STR_LEN];
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+void send_ssrc_event_for_every_dev(ssrc_event_t *event, uint32_t delay_ms) {
+    DT_INST_FOREACH_STATUS_OKAY(SSRC_SEND_FOR_EVERY_DEV)
+}
 
-    int8_t slot = -1;
-    for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        if (peripheral_connections[i].conn == conn) {
-            slot = i;
-            break;
-        }
-        if (!peripheral_connections[i].connected) {
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot < 0) {
-        LOG_WRN("SSRC: No available slot found for new peripheral connection: %s", addr);
-        return;
-    }
-
-    peripheral_connections[slot].conn = conn;
-    peripheral_connections[slot].connected = true;
-
+void on_split_peripheral_connected(uint8_t slot) {
     // Keep existing battery level if reconnecting, otherwise mark as unknown
     if (peripheral_connections[slot].battery_level == 0) {
         peripheral_connections[slot].battery_level = 0xFF;
     }
-    LOG_INF("SSRC: Peripheral %d connected: %s", slot, addr);
-    
-    // TODO: Send connection status via ASDC channel
-}
+    peripheral_connections[slot].connected = true;
 
-static void on_peripheral_disconnected(struct bt_conn *conn, uint8_t reason) {
-    char addr[BT_ADDR_LE_STR_LEN];
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+    LOG_INF("SSRC: Peripheral %d connected", slot);
 
-    int8_t slot = find_peripheral_index(conn);
-    if (slot >= 0) {
-        LOG_INF("SSRC: Peripheral %d disconnected: %s (reason: %u), last battery: %u%%", 
-                slot, addr, reason, peripheral_connections[slot].battery_level);
-        
-        peripheral_connections[slot].connected = false;
-        peripheral_connections[slot].conn = NULL;
-        // Keep battery level on disconnect for reconnection tracking
-        
-        // TODO: Send disconnection status via ASDC channel
+    // send for every device*
+    ssrc_event_t event = {
+        .type = SSRC_EVENT_CONNECTION_STATE_CHANGED,
+        .connection_state_changed = {
+            .slot = slot,
+            .connected = true,
+        },
+    };
+    // delay sending this so the asdc channel has time to be ready
+    send_ssrc_event_for_every_dev(&event, 2000);
+
+    // also send the central state of charge to this peripheral, so it has the latest value
+    // TODO - we likely want this to be a "update everything" function, after other things get implemented
+    if (central_state_of_charge > 0) {                                  // 0 likely means it has not been set yet
+        ssrc_event_t battery_event = {
+            .type = SSRC_EVENT_CENTRAL_BATTERY_LEVEL_CHANGED,
+            .battery_level_changed = {
+                .battery_level = central_state_of_charge,
+            },
+        };
+        send_ssrc_event_for_every_dev(&battery_event, 1000);
     }
 }
 
-BT_CONN_CB_DEFINE(split_status_relay_conn_callbacks) = {
-    .connected = on_peripheral_connected,
-    .disconnected = on_peripheral_disconnected,
-};
+void on_split_peripheral_disconnected(uint8_t slot) {
+    // Keep battery level on disconnect for reconnection tracking
+    peripheral_connections[slot].connected = false;
+    LOG_INF("SSRC: Peripheral %d disconnected", slot);
+
+    // send for every device*
+    ssrc_event_t event = {
+        .type = SSRC_EVENT_CONNECTION_STATE_CHANGED,
+        .connection_state_changed = {
+            .slot = slot,
+            .connected = false,
+        },
+    };
+    send_ssrc_event_for_every_dev(&event, 0);
+}
 
 //
-// Battery level change event listener
+// Peripheral battery level change event listener
 //
 
 static int peripheral_battery_listener(const zmk_event_t *eh) {
@@ -115,9 +115,6 @@ static int peripheral_battery_listener(const zmk_event_t *eh) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
-    // Verify this peripheral slot is actually connected before updating
-    // Note: ev->source comes from ZMK's internal peripheral slot assignment
-    // which should match our tracking if peripherals connect in the same order
     if (!peripheral_connections[ev->source].connected) {
         LOG_WRN("SSRC: Got battery level for disconnected peripheral %u, marking as connected", 
                 ev->source);
@@ -126,11 +123,17 @@ static int peripheral_battery_listener(const zmk_event_t *eh) {
 
     peripheral_connections[ev->source].battery_level = ev->state_of_charge;
     
-    LOG_INF("SSRC: Peripheral %u battery level changed to %u%% (connected: %s)", 
-            ev->source, ev->state_of_charge, 
-            peripheral_connections[ev->source].connected ? "yes" : "no");
+    LOG_INF("SSRC: Peripheral %u battery level changed to %u%%", ev->source, ev->state_of_charge);
 
-    // TODO: Send battery level via ASDC channel
+    // send for every device*
+    ssrc_event_t event = {
+        .type = SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL_CHANGED,
+        .battery_level_changed = {
+            .slot = ev->source,
+            .battery_level = ev->state_of_charge,
+        },
+    };
+    send_ssrc_event_for_every_dev(&event, 0);
 
     return ZMK_EV_EVENT_BUBBLE;
 }
@@ -139,16 +142,63 @@ ZMK_LISTENER(split_status_relay_battery, peripheral_battery_listener);
 ZMK_SUBSCRIPTION(split_status_relay_battery, zmk_peripheral_battery_state_changed);
 
 //
+// Central battery level change event listener
+//
+
+static int central_battery_listener(const zmk_event_t *eh) {
+    const struct zmk_battery_state_changed *ev = as_zmk_battery_state_changed(eh);
+    
+    if (!ev) {
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+    
+    LOG_INF("SSRC: Central battery level: %u%%", ev->state_of_charge);
+    central_state_of_charge = ev->state_of_charge;
+
+    // send for every device*
+    ssrc_event_t event = {
+        .type = SSRC_EVENT_CENTRAL_BATTERY_LEVEL_CHANGED,
+        .battery_level_changed = {
+            .battery_level = ev->state_of_charge,
+        },
+    };
+    send_ssrc_event_for_every_dev(&event, 0);
+    
+    return ZMK_EV_EVENT_BUBBLE;
+}
+ZMK_LISTENER(central_battery_listener, central_battery_listener);
+ZMK_SUBSCRIPTION(central_battery_listener, zmk_battery_state_changed);
+
+//
+// ASDC receive callback
+//
+
+static void ssrc_rx_callback(const struct device *dev, uint8_t *data, size_t len) {
+    //
+    // the central relays all messages to the peripheral(s)
+    if (len < sizeof(ssrc_event_t)) {
+        LOG_ERR("SSRC: Received message too small, got %d from %s, expected %d", len, dev->name, sizeof(ssrc_event_t));
+        return;
+    }
+    ssrc_event_t *event = (ssrc_event_t *)data;
+    LOG_DBG("SSRC: Received event type %d from %s, relaying to all peripherals", event->type, dev->name);
+    send_ssrc_event_for_every_dev(event, 0);
+}
+
+//
 // Device initialization
 //
 
 static int srcc_init(const struct device *dev) {
     // Initialize peripheral connection tracking
     for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        peripheral_connections[i].conn = NULL;
         peripheral_connections[i].connected = false;
         peripheral_connections[i].battery_level = 0xFF;  // 0xFF = unknown
     }
+
+    const struct ssrc_config *config = (const struct ssrc_config *)dev->config;
+    const struct device *asdc_dev = config->asdc_channel;
+    asdc_register_recv_cb(asdc_dev, (asdc_rx_cb)ssrc_rx_callback);
     
     LOG_INF("Split status relay central initialized");
     return 0;
@@ -159,15 +209,14 @@ static int srcc_init(const struct device *dev) {
 //
 
 #define SSRC_CFG_DEFINE(n)                                                      \
-    static const struct srcc_config config_##n = {                              \
+    static const struct ssrc_config config_##n = {                              \
         .asdc_channel = DEVICE_DT_GET(DT_INST_PHANDLE(n, asdc_channel))         \
     };
 
 DT_INST_FOREACH_STATUS_OKAY(SSRC_CFG_DEFINE)
 
 #define SSRC_DEVICE_DEFINE(n)                                                   \
-    static struct srcc_data srcc_data_##n;                                      \
-    DEVICE_DT_INST_DEFINE(n, srcc_init, NULL, &srcc_data_##n,                   \
+    DEVICE_DT_INST_DEFINE(n, srcc_init, NULL, NULL,                             \
                           &config_##n, POST_KERNEL,                             \
                           CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, NULL);
 
