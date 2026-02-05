@@ -4,103 +4,137 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
-#include <split_status_relay_consumer.h>
-#include <split_status_relay.h>
+#include <zmk/events/ssr_peripheral_connection_state_changed.h>
+#include <zmk/events/ssr_central_battery_state_changed.h>
+#include <zmk/events/ssr_peripheral_battery_state_changed.h>
+#include <zmk/events/ssr_central_layer_state_changed.h>
+#include <zmk/events/ssr_central_wpm_state_changed.h>
+#include <zmk/events/ssr_central_transport_changed.h>
+#include <zmk/events/ssr_central_ble_profile_changed.h>
+#include <zmk/events/ssr_central_usb_conn_state_changed.h>
+#include <zmk/events/ssr_peripheral_usb_conn_state_changed.h>
+#include <zmk/event_manager.h>
 
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-static void ssrc_consumer_rx_callback(const struct device *dev, ssrc_event_t *event, size_t event_length) {
-    if (event_length < sizeof(ssrc_event_t) + event->data_length) {
-        LOG_ERR("SSRCC: Received message too small, got %d from %s, expected %d", event_length, dev->name, sizeof(ssrc_event_t) + event->data_length);
-        return;
+static int ssr_connection_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_peripheral_connection_state_changed *ev = 
+        as_zmk_ssr_peripheral_connection_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Connection state slot %d %s", 
+                ev->slot, ev->connected ? "connected" : "disconnected");
     }
-
-    switch (event->type) {
-        case SSRC_EVENT_CONNECTION_STATE: {
-            ssrc_connection_state_event_t *conn_event = (ssrc_connection_state_event_t *)event->data;
-            LOG_DBG("SSRCC: Connection state event, slot %d %s", conn_event->slot, conn_event->connected ? "connected" : "disconnected");
-        }
-        break;
-        case SSRC_EVENT_CENTRAL_BATTERY_LEVEL: {
-            ssrc_central_battery_level_event_t *battery_event = (ssrc_central_battery_level_event_t *)event->data;
-            LOG_DBG("SSRCC: Central Battery level event, level %d%%", battery_event->battery_level);
-        }
-        break;
-        case SSRC_EVENT_PERIPHERAL_BATTERY_LEVEL: {
-            ssrc_peripheral_battery_level_event_t *battery_event = (ssrc_peripheral_battery_level_event_t *)event->data;
-            LOG_DBG("SSRCC: Peripheral Battery level event, slot %d level %d%%", battery_event->slot, battery_event->battery_level);
-        }
-        break;
-        case SSRC_EVENT_HIGHEST_ACTIVE_LAYER: {
-            ssrc_highest_active_layer_event_t *layer_event = (ssrc_highest_active_layer_event_t *)event->data;
-            LOG_DBG("SSRCC: Highest active layer event, layer %d name %s", layer_event->layer, layer_event->layer_name);
-        }
-        break;
-        case SSRC_EVENT_WPM: {
-            ssrc_wpm_event_t *wpm_event = (ssrc_wpm_event_t *)event->data;
-            LOG_DBG("SSRCC: WPM event, wpm %d", wpm_event->wpm);
-        }
-        break;
-        case SSRC_EVENT_TRANSPORT: {
-            ssrc_transport_event_t *transport_event = (ssrc_transport_event_t *)event->data;
-            LOG_DBG("SSRCC: Transport event, transport %u", transport_event->transport);
-        }
-        break;
-        case SSRC_EVENT_ACTIVE_BLE_PROFILE: {
-            ssrc_active_ble_profile_event_t *ble_event = (ssrc_active_ble_profile_event_t *)event->data;
-            LOG_DBG("SSRCC: Active BLE Profile event, index %u connected %d bonded %d",
-                    ble_event->active_profile_index,
-                    ble_event->active_profile_connected,
-                    ble_event->active_profile_bonded);
-        }
-        break;
-        case SSRC_EVENT_CENTRAL_USB_CONNECTION_STATE: {
-            ssrc_central_usb_connection_state_t *usb_event = (ssrc_central_usb_connection_state_t *)event->data;
-            LOG_DBG("SSRCC: Central USB Connection State event, connected %d", usb_event->connected);
-        }
-        break;
-        case SSRC_EVENT_PERIPHERAL_USB_CONNECTION_STATE: {
-            ssrc_peripheral_usb_connection_state_t *usb_event = (ssrc_peripheral_usb_connection_state_t *)event->data;
-            LOG_DBG("SSRCC: Peripheral USB Connection State event, slot %d connected %d", usb_event->slot, usb_event->connected);
-        }
-        break;
-        default: {
-            // Unknown event type
-            LOG_DBG("SSRCC: unknown event type %d", event->type);
-        }
-        break;
-    }
+    return ZMK_EV_EVENT_BUBBLE;
 }
 
-static int ssrc_consumer_init(const struct device *dev)
-{
-    const struct ssrc_consumer_config *config = (const struct ssrc_consumer_config *)dev->config;
-    const struct device *ssrc_dev = config->ssrc;
-    if (!device_is_ready(ssrc_dev)) {
-        LOG_ERR("SSRC device %s not ready", ssrc_dev->name);
-        return -ENODEV;
+static int ssr_central_battery_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_central_battery_state_changed *ev = 
+        as_zmk_ssr_central_battery_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Central battery %d%%", ev->battery_level);
     }
-    // register callback
-    ssrc_register_recv_cb(ssrc_dev, ssrc_consumer_rx_callback);
-    return 0;
+    return ZMK_EV_EVENT_BUBBLE;
 }
 
-//
-// Define config structs for each instance
-//
+static int ssr_peripheral_battery_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_peripheral_battery_state_changed *ev = 
+        as_zmk_ssr_peripheral_battery_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Peripheral battery slot %d %d%%", 
+                ev->slot, ev->battery_level);
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
 
-#define SSRCC_CFG_DEFINE(n)                                                     \
-    static const struct ssrc_consumer_config config_##n = {                     \
-        .ssrc = DEVICE_DT_GET(DT_INST_PHANDLE(n, ssrc)),                        \
-    };
+static int ssr_layer_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_central_layer_state_changed *ev = 
+        as_zmk_ssr_central_layer_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Layer %d (%s)", ev->layer, ev->layer_name);
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
 
-DT_INST_FOREACH_STATUS_OKAY(SSRCC_CFG_DEFINE)
+static int ssr_wpm_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_central_wpm_state_changed *ev = 
+        as_zmk_ssr_central_wpm_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: WPM %d", ev->wpm);
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
 
-#define SSRCC_DEVICE_DEFINE(n)                                                  \
-    DEVICE_DT_INST_DEFINE(n, ssrc_consumer_init, NULL, NULL,                    \
-                          &config_##n, POST_KERNEL,                             \
+static int ssr_transport_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_central_transport_changed *ev = 
+        as_zmk_ssr_central_transport_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Transport %u", ev->transport);
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+static int ssr_ble_profile_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_central_ble_profile_changed *ev = 
+        as_zmk_ssr_central_ble_profile_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: BLE profile %u connected:%d bonded:%d",
+                ev->active_profile_index, ev->active_profile_connected, 
+                ev->active_profile_bonded);
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+static int ssr_central_usb_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_central_usb_conn_state_changed *ev = 
+        as_zmk_ssr_central_usb_conn_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Central USB %s", ev->connected ? "connected" : "disconnected");
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+static int ssr_peripheral_usb_listener(const zmk_event_t *eh) {
+    const struct zmk_ssr_peripheral_usb_conn_state_changed *ev = 
+        as_zmk_ssr_peripheral_usb_conn_state_changed(eh);
+    if (ev) {
+        LOG_DBG("SSR Consumer: Peripheral USB slot %d %s", 
+                ev->slot, ev->connected ? "connected" : "disconnected");
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(ssr_connection_listener, ssr_connection_listener);
+ZMK_SUBSCRIPTION(ssr_connection_listener, zmk_ssr_peripheral_connection_state_changed);
+
+ZMK_LISTENER(ssr_central_battery_listener, ssr_central_battery_listener);
+ZMK_SUBSCRIPTION(ssr_central_battery_listener, zmk_ssr_central_battery_state_changed);
+
+ZMK_LISTENER(ssr_peripheral_battery_listener, ssr_peripheral_battery_listener);
+ZMK_SUBSCRIPTION(ssr_peripheral_battery_listener, zmk_ssr_peripheral_battery_state_changed);
+
+ZMK_LISTENER(ssr_layer_listener, ssr_layer_listener);
+ZMK_SUBSCRIPTION(ssr_layer_listener, zmk_ssr_central_layer_state_changed);
+
+ZMK_LISTENER(ssr_wpm_listener, ssr_wpm_listener);
+ZMK_SUBSCRIPTION(ssr_wpm_listener, zmk_ssr_central_wpm_state_changed);
+
+ZMK_LISTENER(ssr_transport_listener, ssr_transport_listener);
+ZMK_SUBSCRIPTION(ssr_transport_listener, zmk_ssr_central_transport_changed);
+
+ZMK_LISTENER(ssr_ble_profile_listener, ssr_ble_profile_listener);
+ZMK_SUBSCRIPTION(ssr_ble_profile_listener, zmk_ssr_central_ble_profile_changed);
+
+ZMK_LISTENER(ssr_central_usb_listener, ssr_central_usb_listener);
+ZMK_SUBSCRIPTION(ssr_central_usb_listener, zmk_ssr_central_usb_conn_state_changed);
+
+ZMK_LISTENER(ssr_peripheral_usb_listener, ssr_peripheral_usb_listener);
+ZMK_SUBSCRIPTION(ssr_peripheral_usb_listener, zmk_ssr_peripheral_usb_conn_state_changed);
+
+#define SSR_CONSUMER_DEVICE_DEFINE(n)                                           \
+    DEVICE_DT_INST_DEFINE(n, NULL, NULL, NULL,                                  \
+                          NULL, POST_KERNEL,                                    \
                           CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, NULL);
 
-DT_INST_FOREACH_STATUS_OKAY(SSRCC_DEVICE_DEFINE)
+DT_INST_FOREACH_STATUS_OKAY(SSR_CONSUMER_DEVICE_DEFINE)

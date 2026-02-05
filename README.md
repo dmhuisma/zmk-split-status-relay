@@ -36,25 +36,24 @@ Include this project on your ZMK's west manifest in config/west.yml. Also includ
   [...]
 ```
 
-Add the node to your overlay file, including the ASDC node. Add it as a dependency in another module. An example of a consumer module is included in the "example_consumer" directory.
+Add the node to your overlay file, including the ASDC node. An example of a consumer module is included in the "example_consumer" directory.
 
 ``` c
 /{
-    sdc0: split_data_channel {
+    asdc0: split_data_channel {
         compatible = "zmk,arbitrary-split-data-channel";
         channel-id = <1>;
         status = "okay";
     };
 
-    ssrc0: split_status_relay {
+    ssr0: split_status_relay {
         compatible = "zmk,split-status-relay";
-        asdc-channel = <&sdc0>;
+        asdc-channel = <&asdc0>;
         status = "okay";
     };
 
-    ssrcc0: split_status_relay_consumer {
+    ssrc0: split_status_relay_consumer {
         compatible = "zmk,split-status-relay-consumer";
-        ssrc = <&ssrc0>;
         status = "okay";
     };
 }

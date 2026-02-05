@@ -2,7 +2,16 @@ zephyr_library()
 
 if (CONFIG_ZMK_SPLIT_STATUS_RELAY)
 
-  zephyr_syscall_header(include/split_status_relay.h)
+  # Event implementations
+  zephyr_library_sources(src/events/ssr_peripheral_connection_state_changed.c)
+  zephyr_library_sources(src/events/ssr_central_battery_state_changed.c)
+  zephyr_library_sources(src/events/ssr_peripheral_battery_state_changed.c)
+  zephyr_library_sources(src/events/ssr_central_layer_state_changed.c)
+  zephyr_library_sources(src/events/ssr_central_wpm_state_changed.c)
+  zephyr_library_sources(src/events/ssr_central_transport_changed.c)
+  zephyr_library_sources(src/events/ssr_central_ble_profile_changed.c)
+  zephyr_library_sources(src/events/ssr_central_usb_conn_state_changed.c)
+  zephyr_library_sources(src/events/ssr_peripheral_usb_conn_state_changed.c)
 
   if (CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     zephyr_library_sources(src/split_status_relay_central.c)

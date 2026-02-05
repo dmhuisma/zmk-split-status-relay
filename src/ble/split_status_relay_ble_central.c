@@ -43,7 +43,7 @@ static void on_peripheral_connected(struct bt_conn *conn, uint8_t err) {
     }
 
     if (slot < 0) {
-        LOG_WRN("SSRC: No available slot found for new peripheral connection");
+        LOG_WRN("SSRC BLE: No available slot found for new peripheral connection");
         return;
     }
 
