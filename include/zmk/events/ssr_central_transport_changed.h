@@ -10,7 +10,7 @@
 #include <zmk/event_manager.h>
 
 struct zmk_ssr_central_transport_changed {
-    uint8_t transport;
+    uint8_t transport;      // same enum as zmk_transport
 };
 
 ZMK_EVENT_DECLARE(zmk_ssr_central_transport_changed);

@@ -1,68 +1,192 @@
+/*
+ * Copyright (c) 2024 The ZMK Contributors
+ *
+ * SPDX-License-Identifier: MIT
+ */
 
-#include <stdbool.h>
+#include <zephyr/types.h>
+#include <zephyr/init.h>
+
+#include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
-#include <zephyr/logging/log.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/sys/byteorder.h>
 
-void on_split_peripheral_connected(uint8_t slot);
-void on_split_peripheral_disconnected(uint8_t slot);
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-struct peripheral_ble_state {
-    struct bt_conn *conn;
-    bool connected;
+#include <zmk/ble.h>
+
+enum psptr_peripheral_slot_state {
+    PERIPHERAL_SLOT_STATE_OPEN,
+    PERIPHERAL_SLOT_STATE_CONNECTING,
+    PERIPHERAL_SLOT_STATE_CONNECTED,
 };
 
-static struct peripheral_ble_state peripheral_ble_connections[CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS];
+struct psptr_peripheral_slot {
+    enum psptr_peripheral_slot_state state;
+    struct bt_conn *conn;
+};
 
-int8_t get_peripheral_index_by_conn(void *conn) {
-    struct bt_conn* conn_bt = (struct bt_conn*)(conn);
-    for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        if (peripheral_ble_connections[i].conn == conn_bt) {
+static struct psptr_peripheral_slot peripherals[CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS];
+
+// Internal ZMK function to get the peripheral slot given the bt_conn
+// It would be nice to get a cleaner way to get this info without externing this 
+extern int peripheral_slot_index_for_conn(struct bt_conn *conn);
+void on_split_peripheral_connected(uint8_t slot);
+void on_split_peripheral_disconnected(uint8_t slot);
+
+static int psptr_peripheral_slot_index_for_conn(struct bt_conn *conn) {
+    for (int i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
+        if (peripherals[i].conn == conn) {
             return i;
         }
     }
-    return -1;
+    return -EINVAL;
 }
 
-static void on_peripheral_connected(struct bt_conn *conn, uint8_t err) {
-    if (err) {
+static struct psptr_peripheral_slot *psptr_peripheral_slot_for_conn(struct bt_conn *conn) {
+    int idx = psptr_peripheral_slot_index_for_conn(conn);
+    if (idx < 0) {
+        return NULL;
+    }
+    return &peripherals[idx];
+}
+
+static int release_psptr_peripheral_slot(int index) {
+    if (index < 0 || index >= CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS) {
+        return -EINVAL;
+    }
+
+    struct psptr_peripheral_slot *slot = &peripherals[index];
+
+    if (slot->state == PERIPHERAL_SLOT_STATE_OPEN) {
+        return -EINVAL;
+    }
+
+    LOG_DBG("SSRC: Releasing peripheral slot at %d", index);
+
+    if (slot->conn != NULL) {
+        slot->conn = NULL;
+    }
+    slot->state = PERIPHERAL_SLOT_STATE_OPEN;
+
+    return 0;
+}
+
+static int reserve_psptr_peripheral_slot_for_conn(struct bt_conn *conn) {
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_PREF_WEAK_BOND)
+    for (int i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
+        if (peripherals[i].state == PERIPHERAL_SLOT_STATE_OPEN) {
+            // Be sure the slot is fully reinitialized.
+            release_psptr_peripheral_slot(i);
+            peripherals[i].conn = conn;
+            peripherals[i].state = PERIPHERAL_SLOT_STATE_CONNECTED;
+            return i;
+        }
+    }
+#else
+    int i = zmk_ble_put_peripheral_addr(bt_conn_get_dst(conn));
+    if (i >= 0) {
+        if (peripherals[i].state == PERIPHERAL_SLOT_STATE_OPEN) {
+            // Be sure the slot is fully reinitialized.
+            release_psptr_peripheral_slot(i);
+            peripherals[i].conn = conn;
+            peripherals[i].state = PERIPHERAL_SLOT_STATE_CONNECTED;
+            return i;
+        }
+    }
+#endif // IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_PREF_WEAK_BOND)
+
+    return -ENOMEM;
+}
+
+int release_psptr_peripheral_slot_for_conn(struct bt_conn *conn) {
+    int idx = psptr_peripheral_slot_index_for_conn(conn);
+    if (idx < 0) {
+        return idx;
+    }
+
+    return release_psptr_peripheral_slot(idx);
+}
+
+static void split_central_process_connection(struct bt_conn *conn) {
+
+    LOG_DBG("SSRC: Current security for connection: %d", bt_conn_get_security(conn));
+
+    struct psptr_peripheral_slot *slot = psptr_peripheral_slot_for_conn(conn);
+    if (slot == NULL) {
+        LOG_ERR("SSRC: No peripheral state found for connection");
         return;
     }
 
-    int8_t slot = -1;
-    for (uint8_t i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        if (peripheral_ble_connections[i].conn == conn) {
-            slot = i;
-            break;
-        }
-        if (!peripheral_ble_connections[i].connected) {
-            slot = i;
-            break;
-        }
-    }
+    struct bt_conn_info info;
 
-    if (slot < 0) {
-        LOG_WRN("SSRC BLE: No available slot found for new peripheral connection");
+    bt_conn_get_info(conn, &info);
+
+    LOG_DBG("SSRC: New connection params: Interval: %d, Latency: %d, PHY: %d", info.le.interval,
+            info.le.latency, info.le.phy->rx_phy);
+
+    on_split_peripheral_connected(peripheral_slot_index_for_conn(conn));
+}
+
+static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
+    char addr_str[BT_ADDR_LE_STR_LEN];
+    struct bt_conn_info info;
+
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
+
+    bt_conn_get_info(conn, &info);
+
+    if (info.role != BT_CONN_ROLE_CENTRAL) {
+        LOG_DBG("SSRC: SKIPPING FOR ROLE %d", info.role);
         return;
     }
 
-    peripheral_ble_connections[slot].conn = conn;
-    peripheral_ble_connections[slot].connected = true;
-    
-    on_split_peripheral_connected(slot);
+    if (conn_err) {
+        LOG_ERR("SSRC: Failed to connect to %s (%u)", addr_str, conn_err);
+        release_psptr_peripheral_slot_for_conn(conn);
+        return;
+    }
+
+    LOG_DBG("SSRC: Connected: %s", addr_str);
+
+    int slot_idx = reserve_psptr_peripheral_slot_for_conn(conn);
+    if (slot_idx < 0) {
+        LOG_ERR("SSRC: Unable to reserve peripheral slot for connection (err %d)", slot_idx);
+        return;
+    }
+
+    split_central_process_connection(conn);
 }
 
-static void on_peripheral_disconnected(struct bt_conn *conn, uint8_t reason) {
-    int8_t slot = get_peripheral_index_by_conn(conn);
-    if (slot >= 0) {
-        peripheral_ble_connections[slot].connected = false;
-        peripheral_ble_connections[slot].conn = NULL;
-        on_split_peripheral_disconnected(slot);
+static void split_central_disconnected(struct bt_conn *conn, uint8_t reason) {
+    char addr_str[BT_ADDR_LE_STR_LEN];
+    int err;
+
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
+    LOG_DBG("SSRC: Disconnected: %s (reason %d)", addr_str, reason);
+
+    on_split_peripheral_disconnected(peripheral_slot_index_for_conn(conn));
+
+    // k_msleep(100);
+
+    err = release_psptr_peripheral_slot_for_conn(conn);
+
+    if (err < 0) {
+        return;
     }
 }
 
-BT_CONN_CB_DEFINE(split_status_relay_conn_callbacks) = {
-    .connected = on_peripheral_connected,
-    .disconnected = on_peripheral_disconnected,
+static struct bt_conn_cb conn_callbacks = {
+    .connected = split_central_connected,
+    .disconnected = split_central_disconnected,
 };
+
+static int zmk_split_bt_central_init(void) {
+    bt_conn_cb_register(&conn_callbacks);
+    return 0;
+}
+
+SYS_INIT(zmk_split_bt_central_init, APPLICATION, CONFIG_ZMK_BLE_INIT_PRIORITY);

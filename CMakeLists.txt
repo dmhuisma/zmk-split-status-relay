@@ -13,6 +13,7 @@ if (CONFIG_ZMK_SPLIT_STATUS_RELAY)
   zephyr_library_sources(src/events/ssr_central_usb_conn_state_changed.c)
   zephyr_library_sources(src/events/ssr_peripheral_usb_conn_state_changed.c)
 
+  zephyr_library_sources(src/split_status_relay.c)
   if (CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     zephyr_library_sources(src/split_status_relay_central.c)
     if (CONFIG_ZMK_SPLIT_BLE)

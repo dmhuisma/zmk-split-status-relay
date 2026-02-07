@@ -25,3 +25,5 @@ struct ssr_asdc_event {
     uint16_t data_length;
     uint8_t data[];
 };
+
+void raise_ssr_event(struct ssr_asdc_event* event);

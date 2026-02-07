@@ -32,12 +32,14 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
+// Internal ZMK function to get the peripheral slot given the bt_conn
+// It would be nice to get a cleaner way to get this info without externing this 
+extern int peripheral_slot_index_for_conn(struct bt_conn *conn);
+
 // Config structure
 struct ssrc_config {
     const struct device *asdc_channel;
 };
-
-int8_t get_peripheral_index_by_conn(void *conn);
 
 struct peripheral_state {
     bool connected;
@@ -112,6 +114,10 @@ static void send_active_layer_event(uint8_t layer, uint32_t delay_ms) {
     strcpy((char *)&event->data[1], layer_name);
     
     send_asdc_event_for_every_dev(event, 0);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_central_layer_state_changed(
+        (struct zmk_ssr_central_layer_state_changed){.layer = layer, .layer_name = layer_name});
 }
 
 static void send_connection_state_event(uint8_t slot, bool connected, uint32_t delay_ms) {
@@ -123,6 +129,9 @@ static void send_connection_state_event(uint8_t slot, bool connected, uint32_t d
         data->slot = slot;
         data->connected = connected;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_peripheral_connection_state_changed(*data);
 }
 
 static void send_peripheral_battery_level_event(uint8_t slot, uint8_t battery_level, uint32_t delay_ms) {
@@ -134,6 +143,9 @@ static void send_peripheral_battery_level_event(uint8_t slot, uint8_t battery_le
         data->slot = slot;
         data->battery_level = battery_level;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_peripheral_battery_state_changed(*data);
 }
 
 static void send_central_battery_level_event(uint8_t battery_level, uint32_t delay_ms) {
@@ -144,6 +156,9 @@ static void send_central_battery_level_event(uint8_t battery_level, uint32_t del
     struct zmk_ssr_central_battery_state_changed *data = (struct zmk_ssr_central_battery_state_changed *)event->data;
         data->battery_level = battery_level;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_central_battery_state_changed(*data);
 }
 
 static void send_wpm_event(int wpm, uint32_t delay_ms) {
@@ -154,6 +169,9 @@ static void send_wpm_event(int wpm, uint32_t delay_ms) {
     struct zmk_ssr_central_wpm_state_changed *data = (struct zmk_ssr_central_wpm_state_changed *)event->data;
         data->wpm = wpm;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_central_wpm_state_changed(*data);
 }
 
 static void send_transport_event(enum zmk_transport transport, uint32_t delay_ms) {
@@ -164,6 +182,9 @@ static void send_transport_event(enum zmk_transport transport, uint32_t delay_ms
     struct zmk_ssr_central_transport_changed *data = (struct zmk_ssr_central_transport_changed *)event->data;
         data->transport = (uint8_t)transport;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_central_transport_changed(*data);
 }
 
 #if defined(CONFIG_ZMK_BLE)
@@ -177,6 +198,9 @@ void send_active_ble_transport_event(uint8_t profile_index, bool connected, bool
         data->active_profile_connected = connected;
         data->active_profile_bonded = bonded;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_central_ble_profile_changed(*data);
 }
 #endif
 
@@ -189,6 +213,9 @@ void send_central_usb_connection_state_event(bool connected, uint32_t delay_ms) 
     struct zmk_ssr_central_usb_conn_state_changed *data = (struct zmk_ssr_central_usb_conn_state_changed *)event->data;
         data->connected = connected;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_central_usb_conn_state_changed(*data);
 }
 #endif
 
@@ -201,6 +228,9 @@ void send_peripheral_usb_connection_state_event(uint8_t slot, bool connected, ui
         data->slot = slot;
         data->connected = connected;
     send_asdc_event_for_every_dev(event, delay_ms);
+    
+    // Raise event locally on central
+    raise_zmk_ssr_peripheral_usb_conn_state_changed(*data);
 }
 
 static void send_all_events(void) {
@@ -253,12 +283,14 @@ static void send_all_events_work_handler(struct k_work *work) {
 //
 
 void on_split_peripheral_connected(uint8_t slot) {
+    LOG_DBG("on_split_peripheral_connected: slot %u", slot);
     ssrc_state.peripheral_connections[slot].connected = true;
     // Schedule sending all events after a delay to allow connection to stabilize
     k_work_schedule(&send_all_events_work, K_MSEC(2000));
 }
 
 void on_split_peripheral_disconnected(uint8_t slot) {
+    LOG_DBG("on_split_peripheral_disconnected: slot %u", slot);
     // Keep battery level on disconnect for reconnection tracking
     ssrc_state.peripheral_connections[slot].connected = false;
     send_connection_state_event(slot, false, 0);
@@ -281,6 +313,9 @@ static int peripheral_battery_listener(const zmk_event_t *eh) {
                 ev->source);
         return ZMK_EV_EVENT_BUBBLE;
     }
+
+    LOG_DBG("SSRC: Battery event slot %u, level %u, connected=%d", 
+            ev->source, ev->state_of_charge, ssrc_state.peripheral_connections[ev->source].connected);
 
     if (!ssrc_state.peripheral_connections[ev->source].connected) {
         LOG_WRN("SSRC: Got battery level for disconnected peripheral %u, ignoring", ev->source);
@@ -433,8 +468,9 @@ static void asdc_rx_callback(const struct device *asdc_dev, void* sender_conn, u
         return;
     }
 
-    // get the peripheral slot that the event came from
-    int8_t slot = get_peripheral_index_by_conn(sender_conn);
+    // get the peripheral slot that the event came from, this comes from ZMK itself
+    // TODO - this is BLE only, wrap it in define
+    int8_t slot = peripheral_slot_index_for_conn(sender_conn);
     if (slot < 0) {
         LOG_ERR("SSRC: Received message from unknown peripheral connection on %s", asdc_dev->name);
         return;
@@ -457,20 +493,8 @@ static void asdc_rx_callback(const struct device *asdc_dev, void* sender_conn, u
     // relay the event to all peripherals
     send_asdc_event_for_every_dev(event, 0);
 
-    // Raise ZMK event for peripheral USB connection state on central
-    switch (event->type) {
-        case SSR_EVENT_PERIPHERAL_USB_CONNECTION_STATE: {
-            struct zmk_ssr_peripheral_usb_conn_state_changed *usb_event = (struct zmk_ssr_peripheral_usb_conn_state_changed *)event->data;
-            raise_zmk_ssr_peripheral_usb_conn_state_changed(
-                (struct zmk_ssr_peripheral_usb_conn_state_changed){
-                    .slot = usb_event->slot,
-                    .connected = usb_event->connected
-                });
-        }
-        break;
-        default:
-            break;
-    }
+    // raise ZMK event for the consumer of this module to use
+    raise_ssr_event(event);
 }
 
 //
