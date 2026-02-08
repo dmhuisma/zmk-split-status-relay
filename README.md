@@ -16,7 +16,8 @@ The following information is relayed to all peripherals:
 
 This is currently being used in the [nice-view-battery-peripheral](https://github.com/dmhuisma/nice-view-battery-peripheral) module to provide a useful display on peripheral  splits.
 
-[!NOTE] The index of each split peripheral is determined by the order they are paired. So you likely want to connect left splits before the right one.
+> [!NOTE] 
+> The index of each split peripheral is determined by the order they are paired. So you likely want to connect left splits before the right one.
 
 # How to use
 
