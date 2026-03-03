@@ -402,7 +402,13 @@ ZMK_SUBSCRIPTION(central_wpm_listener, zmk_wpm_state_changed);
 //
 
 static int central_endpoint_listener(const zmk_event_t *eh) {
+    #if (KERNEL_VERSION_MAJOR >= 4)
+    // zmk 0.4 and above
+    enum zmk_transport transport = zmk_endpoint_get_selected().transport;
+    #else
+    // zmk 0.3 and below
     enum zmk_transport transport = zmk_endpoints_selected().transport;
+    #endif
     if (transport == ssrc_state.transport) {
         return ZMK_EV_EVENT_BUBBLE;
     }
@@ -514,7 +520,13 @@ static int srcc_init(const struct device *dev) {
     #ifdef CONFIG_ZMK_WPM
     ssrc_state.wpm = zmk_wpm_get_state();
     #endif
+    #if (KERNEL_VERSION_MAJOR >= 4)
+    // zmk 0.4 and above
+    ssrc_state.transport = zmk_endpoint_get_selected().transport;
+    #else
+    // zmk 0.3 and below
     ssrc_state.transport = zmk_endpoints_selected().transport;
+    #endif
     #if defined(CONFIG_ZMK_BLE)
     ssrc_state.active_ble_profile_index = zmk_ble_active_profile_index();
     ssrc_state.active_ble_profile_connected = zmk_ble_active_profile_is_connected();
